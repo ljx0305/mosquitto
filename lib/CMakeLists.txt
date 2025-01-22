@@ -1,12 +1,18 @@
-option(WITH_STATIC_LIBRARIES "Build static versions of the libmosquitto/pp libraries?" OFF)
-option(WITH_PIC "Build the static library with PIC (Position Independent Code) enabled archives?" OFF)
-add_subdirectory(cpp)
+option(WITH_LIB_CPP "Build C++ library?" ON)
+if (WITH_LIB_CPP)
+	add_subdirectory(cpp)
+endif (WITH_LIB_CPP)
 
 include_directories(${mosquitto_SOURCE_DIR} ${mosquitto_SOURCE_DIR}/lib
-			${mosquitto_SOURCE_DIR}/src/deps
-			${STDBOOL_H_PATH} ${STDINT_H_PATH}
-			${OPENSSL_INCLUDE_DIR} ${PTHREAD_INCLUDE_DIR})
+			${OPENSSL_INCLUDE_DIR} # Required for cross compilation
+			${mosquitto_SOURCE_DIR}/include
+			${STDBOOL_H_PATH} ${STDINT_H_PATH})
+
 link_directories(${mosquitto_SOURCE_DIR}/lib)
+
+if (WITH_BUNDLED_DEPS)
+        include_directories(${mosquitto_SOURCE_DIR} ${mosquitto_SOURCE_DIR}/deps)
+endif (WITH_BUNDLED_DEPS)
 
 set(C_SRC
 	actions.c
@@ -27,9 +33,10 @@ set(C_SRC
 	loop.c
 	memory_mosq.c memory_mosq.h
 	messages_mosq.c messages_mosq.h
-	mosquitto.c mosquitto.h
+	misc_mosq.c misc_mosq.h
+	mosquitto.c ../include/mosquitto.h
 	mosquitto_internal.h
-	mqtt_protocol.h
+	../include/mqtt_protocol.h
 	net_mosq_ocsp.c net_mosq.c net_mosq.h
 	options.c
 	packet_datatypes.c
@@ -45,6 +52,7 @@ set(C_SRC
 	send_mosq.c send_mosq.h
 	socks_mosq.c
 	srv_mosq.c
+	strings_mosq.c
 	thread_mosq.c
 	time_mosq.c
 	tls_mosq.c
@@ -52,14 +60,14 @@ set(C_SRC
 	util_mosq.c util_topic.c util_mosq.h
 	will_mosq.c will_mosq.h)
 
-set (LIBRARIES ${OPENSSL_LIBRARIES} ${PTHREAD_LIBRARIES})
+set (LIBRARIES ${OPENSSL_LIBRARIES})
 
-if (UNIX AND NOT APPLE)
+if (UNIX AND NOT APPLE AND NOT ANDROID)
 	find_library(LIBRT rt)
 	if (LIBRT)
 		set (LIBRARIES ${LIBRARIES} rt)
 	endif (LIBRT)
-endif (UNIX AND NOT APPLE)
+endif (UNIX AND NOT APPLE AND NOT ANDROID)
 
 if (WIN32)
 	set (LIBRARIES ${LIBRARIES} ws2_32)
@@ -81,7 +89,18 @@ set_target_properties(libmosquitto PROPERTIES
 	POSITION_INDEPENDENT_CODE 1
 )
 
-target_link_libraries(libmosquitto ${LIBRARIES})
+target_link_libraries(libmosquitto PRIVATE ${LIBRARIES})
+
+if (WITH_THREADING)
+	if(WIN32)
+		 target_link_libraries(libmosquitto PRIVATE PThreads4W::PThreads4W)
+	else()
+		set(THREADS_PREFER_PTHREAD_FLAG ON)
+		find_package(Threads REQUIRED)
+
+		target_link_libraries(libmosquitto PRIVATE Threads::Threads)
+	endif()
+endif()
 
 set_target_properties(libmosquitto PROPERTIES
 	OUTPUT_NAME mosquitto
@@ -89,7 +108,17 @@ set_target_properties(libmosquitto PROPERTIES
 	SOVERSION 1
 )
 
-install(TARGETS libmosquitto RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}" LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}")
+if(UNIX AND NOT APPLE)
+	set_target_properties(libmosquitto PROPERTIES
+		LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/linker.version
+		LINK_FLAGS "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/linker.version"
+	)
+endif()
+
+install(TARGETS libmosquitto
+	RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+	ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+	LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}")
 
 if (WITH_STATIC_LIBRARIES)
 	add_library(libmosquitto_static STATIC ${C_SRC})
@@ -102,7 +131,7 @@ if (WITH_STATIC_LIBRARIES)
 	target_link_libraries(libmosquitto_static ${LIBRARIES})
 
 	set_target_properties(libmosquitto_static PROPERTIES
-		OUTPUT_NAME mosquitto
+		OUTPUT_NAME mosquitto_static
 		VERSION ${VERSION}
 	)
 
@@ -110,4 +139,5 @@ if (WITH_STATIC_LIBRARIES)
 	install(TARGETS libmosquitto_static ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}")
 endif (WITH_STATIC_LIBRARIES)
 
-install(FILES mosquitto.h DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
+install(FILES ../include/mosquitto.h DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
+install(FILES ../include/mqtt_protocol.h DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")

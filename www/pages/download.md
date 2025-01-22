@@ -1,7 +1,7 @@
 <!--
 .. title: Download
 .. slug: download
-.. date: 2019-08-01 13:12:00 UTC+1
+.. date: 2021-10-27 16:37:38 UTC+1
 .. tags: tag
 .. category: category
 .. link: link
@@ -11,7 +11,7 @@
 
 # Source
 
-* [mosquitto-1.6.4.tar.gz](https://mosquitto.org/files/source/mosquitto-1.6.4.tar.gz) (319kB) ([GPG signature](https://mosquitto.org/files/source/mosquitto-1.6.4.tar.gz.asc))
+* [mosquitto-2.0.20.tar.gz](https://mosquitto.org/files/source/mosquitto-2.0.20.tar.gz) ([GPG signature](https://mosquitto.org/files/source/mosquitto-2.0.20.tar.gz.asc))
 * [Git source code repository](https://github.com/eclipse/mosquitto) (github.com)
 
 Older downloads are available at [https://mosquitto.org/files/](../files/)
@@ -24,10 +24,11 @@ distributions.
 
 ## Windows
 
-* [mosquitto-1.6.4-install-windows-x64.exe](https://mosquitto.org/files/binary/win64/mosquitto-1.6.4-install-windows-x64.exe) (~1.4 MB) (64-bit build, Windows Vista and up, built with Visual Studio Community 2017)
-* [mosquitto-1.6.4-install-windows-x32.exe](https://mosquitto.org/files/binary/win32/mosquitto-1.6.2-install-windows-x86.exe) (~1.4 MB) (32-bit build, Windows Vista and up, built with Visual Studio Community 2017)
+* [mosquitto-2.0.20-install-windows-x64.exe](https://mosquitto.org/files/binary/win64/mosquitto-2.0.20-install-windows-x64.exe)
 
-See also readme-windows.txt after installing.
+Older installers can be found at [https://mosquitto.org/files/binary/](https://mosquitto.org/files/binary/).
+
+See also README-windows.md after installing.
 
 ## Mac
 Mosquitto can be installed from the homebrew project. See

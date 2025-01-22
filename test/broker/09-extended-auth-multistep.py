@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 from mosq_test_helper import *
 
@@ -40,6 +40,8 @@ try:
     rc = 0
 
     sock.close()
+except mosq_test.TestError:
+    pass
 finally:
     os.remove(conf_file)
     broker.terminate()

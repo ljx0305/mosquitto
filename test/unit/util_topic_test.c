@@ -11,6 +11,16 @@ static void match_helper(const char *sub, const char *topic)
 	rc = mosquitto_topic_matches_sub(sub, topic, &match);
 	CU_ASSERT_EQUAL(rc, MOSQ_ERR_SUCCESS);
 	CU_ASSERT_EQUAL(match, true);
+	if(match == false){
+		printf("1: %s:%s\n", sub, topic);
+	}
+
+	rc = mosquitto_topic_matches_sub2(sub, strlen(sub), topic, strlen(topic), &match);
+	CU_ASSERT_EQUAL(rc, MOSQ_ERR_SUCCESS);
+	CU_ASSERT_EQUAL(match, true);
+	if(match == false){
+		printf("2: %s:%s\n", sub, topic);
+	}
 }
 
 static void no_match_helper(int rc_expected, const char *sub, const char *topic)
@@ -20,6 +30,16 @@ static void no_match_helper(int rc_expected, const char *sub, const char *topic)
 
 	rc = mosquitto_topic_matches_sub(sub, topic, &match);
 	CU_ASSERT_EQUAL(rc, rc_expected);
+	if(rc != rc_expected){
+		printf("%d:%d %s:%s\n", rc, rc_expected, sub, topic);
+	}
+	CU_ASSERT_EQUAL(match, false);
+
+	rc = mosquitto_topic_matches_sub2(sub, strlen(sub), topic, strlen(topic), &match);
+	CU_ASSERT_EQUAL(rc, rc_expected);
+	if(rc != rc_expected){
+		printf("%d:%d %s:%s\n", rc, rc_expected, sub, topic);
+	}
 	CU_ASSERT_EQUAL(match, false);
 }
 
@@ -135,6 +155,16 @@ static void TEST_invalid_but_matching(void)
 	no_match_helper(MOSQ_ERR_INVAL, "foo/bar#", "foo/bar#");
 
 	no_match_helper(MOSQ_ERR_INVAL, "foo+", "fooa");
+
+	no_match_helper(MOSQ_ERR_INVAL, "foo/+", "foo/+");
+	no_match_helper(MOSQ_ERR_INVAL, "foo/#", "foo/+");
+	no_match_helper(MOSQ_ERR_INVAL, "foo/+", "foo/bar/+");
+	no_match_helper(MOSQ_ERR_INVAL, "foo/#", "foo/bar/+");
+
+	no_match_helper(MOSQ_ERR_INVAL, "foo/+", "foo/#");
+	no_match_helper(MOSQ_ERR_INVAL, "foo/#", "foo/#");
+	no_match_helper(MOSQ_ERR_INVAL, "foo/+", "foo/bar/#");
+	no_match_helper(MOSQ_ERR_INVAL, "foo/#", "foo/bar/#");
 }
 
 

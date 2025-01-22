@@ -1,12 +1,14 @@
 include_directories(${mosquitto_SOURCE_DIR} ${mosquitto_SOURCE_DIR}/src
-		${mosquitto_SOURCE_DIR}/lib ${OPENSSL_INCLUDE_DIR}
-		${STDBOOL_H_PATH} ${STDINT_H_PATH})
+		${mosquitto_SOURCE_DIR}/include ${mosquitto_SOURCE_DIR}/lib
+		${OPENSSL_INCLUDE_DIR} ${STDBOOL_H_PATH} ${STDINT_H_PATH})
 
 set (MOSQ_SRCS
 	../lib/alias_mosq.c ../lib/alias_mosq.h
+	bridge.c bridge_topic.c
 	conf.c
 	conf_includedir.c
 	context.c
+	control.c
 	database.c
 	handle_auth.c
 	handle_connack.c
@@ -21,24 +23,30 @@ set (MOSQ_SRCS
 	handle_subscribe.c
 	../lib/handle_unsuback.c
 	handle_unsubscribe.c
+	keepalive.c
 	lib_load.h
 	logging.c
 	loop.c
 	../lib/memory_mosq.c ../lib/memory_mosq.h
+	memory_public.c
 	mosquitto.c
-	mosquitto_broker.h mosquitto_broker_internal.h
+	../include/mosquitto_broker.h mosquitto_broker_internal.h
+	../lib/misc_mosq.c ../lib/misc_mosq.h
+	mux.c mux.h mux_epoll.c mux_poll.c
 	net.c
 	../lib/net_mosq_ocsp.c ../lib/net_mosq.c ../lib/net_mosq.h
 	../lib/packet_datatypes.c
 	../lib/packet_mosq.c ../lib/packet_mosq.h
+	password_mosq.c password_mosq.h
 	persist_read_v234.c persist_read_v5.c persist_read.c
 	persist_write_v5.c persist_write.c
 	persist.h
-	plugin.c
+	plugin.c plugin_public.c
 	property_broker.c
 	../lib/property_mosq.c ../lib/property_mosq.h
 	read_handle.c
 	../lib/read_handle.h
+	retain.c
 	security.c security_default.c
 	../lib/send_mosq.c ../lib/send_mosq.h
 	send_auth.c
@@ -52,10 +60,12 @@ set (MOSQ_SRCS
 	send_unsuback.c
 	../lib/send_unsubscribe.c
 	session_expiry.c
+	../lib/strings_mosq.c
 	subs.c
 	sys_tree.c sys_tree.h
 	../lib/time_mosq.c
 	../lib/tls_mosq.c
+	topic_tok.c
 	../lib/util_mosq.c ../lib/util_topic.c ../lib/util_mosq.h
 	../lib/utf8_mosq.c
 	websockets.c
@@ -63,10 +73,14 @@ set (MOSQ_SRCS
 	../lib/will_mosq.c ../lib/will_mosq.h)
 
 
-option(WITH_BUNDLED_DEPS "Build with bundled dependencies?" ON)
 if (WITH_BUNDLED_DEPS)
-	include_directories(${mosquitto_SOURCE_DIR} ${mosquitto_SOURCE_DIR}/src/deps)
+	include_directories(${mosquitto_SOURCE_DIR} ${mosquitto_SOURCE_DIR}/deps)
 endif (WITH_BUNDLED_DEPS)
+
+find_path(HAVE_SYS_EPOLL_H sys/epoll.h)
+if (HAVE_SYS_EPOLL_H)
+	add_definitions("-DWITH_EPOLL")
+endif()
 
 option(INC_BRIDGE_SUPPORT
 	"Include bridge support for connecting to other brokers?" ON)
@@ -105,6 +119,9 @@ if (WITH_SYS_TREE)
 	add_definitions("-DWITH_SYS_TREE")
 endif (WITH_SYS_TREE)
 
+option(WITH_ADNS
+	"Include ADNS support?" OFF)
+
 if (CMAKE_SYSTEM_NAME STREQUAL Linux)
 	option(WITH_SYSTEMD
 		"Include systemd support?" OFF)
@@ -118,8 +135,15 @@ endif (CMAKE_SYSTEM_NAME STREQUAL Linux)
 option(WITH_WEBSOCKETS "Include websockets support?" OFF)
 option(STATIC_WEBSOCKETS "Use the static libwebsockets library?" OFF)
 if (WITH_WEBSOCKETS)
+	find_package(libwebsockets)
 	add_definitions("-DWITH_WEBSOCKETS")
 endif (WITH_WEBSOCKETS)
+
+option(WITH_CONTROL "Include $CONTROL topic support?" ON)
+if (WITH_CONTROL)
+	add_definitions("-DWITH_CONTROL")
+endif (WITH_CONTROL)
+
 
 if (WIN32 OR CYGWIN)
 	set (MOSQ_SRCS ${MOSQ_SRCS} service.c)
@@ -130,22 +154,29 @@ add_definitions (-DWITH_BROKER)
 if (WITH_DLT)
     message(STATUS "DLT_LIBDIR = ${DLT_LIBDIR}")
     link_directories(${DLT_LIBDIR})
-    set (MOSQ_LIBS ${DLT_LIBRARIES})
+    set (MOSQ_LIBS ${MOSQ_LIBS} ${DLT_LIBRARIES})
 endif (WITH_DLT)
 
 set (MOSQ_LIBS ${MOSQ_LIBS} ${OPENSSL_LIBRARIES})
 # Check for getaddrinfo_a
 include(CheckLibraryExists)
 check_library_exists(anl getaddrinfo_a  "" HAVE_GETADDRINFO_A)
-if (HAVE_GETADDRINFO_A)
+if (HAVE_GETADDRINFO_A AND WITH_ADNS)
+	add_definitions("-DWITH_ADNS")
 	add_definitions(-DHAVE_GETADDRINFO_A)
 	set (MOSQ_LIBS ${MOSQ_LIBS} anl)
-endif (HAVE_GETADDRINFO_A)
+endif (HAVE_GETADDRINFO_A AND WITH_ADNS)
 
 
 if (UNIX)
 	if (APPLE)
 		set (MOSQ_LIBS ${MOSQ_LIBS} dl m)
+    elseif (${CMAKE_SYSTEM_NAME} MATCHES "OpenBSD")
+	    set (MOSQ_LIBS ${MOSQ_LIBS} m)
+	elseif (${CMAKE_SYSTEM_NAME} MATCHES "NetBSD")
+		set (MOSQ_LIBS ${MOSQ_LIBS} m)
+	elseif (${CMAKE_SYSTEM_NAME} MATCHES "Haiku")
+	    set (MOSQ_LIBS ${MOSQ_LIBS} m network)
     elseif(QNX)
         set(MOSQ_LIBS ${MOSQ_LIBS} m socket)
     else(APPLE)
@@ -169,12 +200,15 @@ if (WITH_WEBSOCKETS)
 			link_directories(${mosquitto_SOURCE_DIR})
 		endif (WIN32)
 	else (STATIC_WEBSOCKETS)
-		set (MOSQ_LIBS ${MOSQ_LIBS} websockets)
+		set (MOSQ_LIBS ${MOSQ_LIBS} websockets_shared)
 	endif (STATIC_WEBSOCKETS)
 endif (WITH_WEBSOCKETS)
 
 add_executable(mosquitto ${MOSQ_SRCS})
 target_link_libraries(mosquitto ${MOSQ_LIBS})
+if (WIN32)
+	set_target_properties(mosquitto PROPERTIES ENABLE_EXPORTS 1)
+endif (WIN32)
 
 if (UNIX)
 	if (APPLE)
@@ -185,10 +219,4 @@ if (UNIX)
 endif (UNIX)
 
 install(TARGETS mosquitto RUNTIME DESTINATION "${CMAKE_INSTALL_SBINDIR}")
-install(FILES mosquitto_broker.h mosquitto_plugin.h DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
-
-if (WITH_TLS)
-	add_executable(mosquitto_passwd mosquitto_passwd.c)
-	target_link_libraries(mosquitto_passwd ${OPENSSL_LIBRARIES})
-	install(TARGETS mosquitto_passwd RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
-endif (WITH_TLS)
+install(FILES ../include/mosquitto_broker.h ../include/mosquitto_plugin.h DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")

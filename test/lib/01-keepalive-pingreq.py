@@ -12,7 +12,7 @@ from mosq_test_helper import *
 port = mosq_test.get_lib_port()
 
 rc = 1
-keepalive = 4
+keepalive = 5
 connect_packet = mosq_test.gen_connect("01-keepalive-pingreq", keepalive=keepalive)
 connack_packet = mosq_test.gen_connack(rc=0)
 
@@ -39,17 +39,18 @@ try:
     (conn, address) = sock.accept()
     conn.settimeout(keepalive+10)
 
-    if mosq_test.expect_packet(conn, "connect", connect_packet):
-        conn.send(connack_packet)
+    mosq_test.do_receive_send(conn, connect_packet, connack_packet, "connect")
 
-        if mosq_test.expect_packet(conn, "pingreq", pingreq_packet):
-            time.sleep(1.0)
-            conn.send(pingresp_packet)
+    mosq_test.expect_packet(conn, "pingreq", pingreq_packet)
+    time.sleep(1.0)
+    conn.send(pingresp_packet)
 
-            if mosq_test.expect_packet(conn, "pingreq", pingreq_packet):
-                rc = 0
+    mosq_test.expect_packet(conn, "pingreq", pingreq_packet)
+    rc = 0
 
     conn.close()
+except mosq_test.TestError:
+    pass
 finally:
     client.terminate()
     client.wait()

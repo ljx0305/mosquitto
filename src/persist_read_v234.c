@@ -1,15 +1,17 @@
 /*
-Copyright (c) 2010-2018 Roger Light <roger@atchoo.org>
+Copyright (c) 2010-2020 Roger Light <roger@atchoo.org>
 
 All rights reserved. This program and the accompanying materials
-are made available under the terms of the Eclipse Public License v1.0
+are made available under the terms of the Eclipse Public License 2.0
 and Eclipse Distribution License v1.0 which accompany this distribution.
- 
+
 The Eclipse Public License is available at
-   http://www.eclipse.org/legal/epl-v10.html
+   https://www.eclipse.org/legal/epl-2.0/
 and the Eclipse Distribution License is available at
   http://www.eclipse.org/org/documents/edl-v10.php.
- 
+
+SPDX-License-Identifier: EPL-2.0 OR BSD-3-Clause
+
 Contributors:
    Roger Light - initial implementation and documentation.
 */
@@ -21,7 +23,6 @@ Contributors:
 #ifndef WIN32
 #include <arpa/inet.h>
 #endif
-#include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -36,7 +37,7 @@ Contributors:
 #include "util_mosq.h"
 
 
-int persist__chunk_header_read_v234(FILE *db_fptr, int *chunk, int *length)
+int persist__chunk_header_read_v234(FILE *db_fptr, uint32_t *chunk, uint32_t *length)
 {
 	size_t rlen;
 	uint16_t i16temp;
@@ -44,10 +45,10 @@ int persist__chunk_header_read_v234(FILE *db_fptr, int *chunk, int *length)
 
 	rlen = fread(&i16temp, sizeof(uint16_t), 1, db_fptr);
 	if(rlen != 1) return 1;
-	
+
 	rlen = fread(&i32temp, sizeof(uint32_t), 1, db_fptr);
 	if(rlen != 1) return 1;
-	
+
 	*chunk = ntohs(i16temp);
 	*length = ntohl(i32temp);
 
@@ -57,8 +58,8 @@ int persist__chunk_header_read_v234(FILE *db_fptr, int *chunk, int *length)
 
 int persist__chunk_cfg_read_v234(FILE *db_fptr, struct PF_cfg *chunk)
 {
-	read_e(db_fptr, &chunk->shutdown, sizeof(uint8_t)); // shutdown
-	read_e(db_fptr, &chunk->dbid_size, sizeof(uint8_t)); // sizeof(dbid_t)
+	read_e(db_fptr, &chunk->shutdown, sizeof(uint8_t)); /* shutdown */
+	read_e(db_fptr, &chunk->dbid_size, sizeof(uint8_t)); /* sizeof(dbid_t) */
 	read_e(db_fptr, &chunk->last_db_id, sizeof(dbid_t));
 
 	return MOSQ_ERR_SUCCESS;
@@ -68,7 +69,7 @@ error:
 }
 
 
-int persist__chunk_client_read_v234(FILE *db_fptr, struct P_client *chunk, int db_version)
+int persist__chunk_client_read_v234(FILE *db_fptr, struct P_client *chunk, uint32_t db_version)
 {
 	uint16_t i16temp;
 	int rc;
@@ -116,7 +117,7 @@ int persist__chunk_client_msg_read_v234(FILE *db_fptr, struct P_client_msg *chun
 	read_e(db_fptr, &chunk->F.state, sizeof(uint8_t));
 	read_e(db_fptr, &dup, sizeof(uint8_t));
 
-	chunk->F.retain_dup = (retain&0x0F)<<4 | (dup&0x0F);
+	chunk->F.retain_dup = (uint8_t)((retain&0x0F)<<4 | (dup&0x0F));
 
 	return MOSQ_ERR_SUCCESS;
 error:
@@ -127,7 +128,7 @@ error:
 }
 
 
-int persist__chunk_msg_store_read_v234(FILE *db_fptr, struct P_msg_store *chunk, int db_version)
+int persist__chunk_msg_store_read_v234(FILE *db_fptr, struct P_msg_store *chunk, uint32_t db_version)
 {
 	uint32_t i32temp;
 	uint16_t i16temp;
@@ -165,19 +166,22 @@ int persist__chunk_msg_store_read_v234(FILE *db_fptr, struct P_msg_store *chunk,
 
 	read_e(db_fptr, &chunk->F.qos, sizeof(uint8_t));
 	read_e(db_fptr, &chunk->F.retain, sizeof(uint8_t));
-	
+
 	read_e(db_fptr, &i32temp, sizeof(uint32_t));
 	chunk->F.payloadlen = ntohl(i32temp);
 
 	if(chunk->F.payloadlen){
-		if(UHPA_ALLOC(chunk->payload, chunk->F.payloadlen) == 0){
+		chunk->payload = mosquitto_malloc(chunk->F.payloadlen+1);
+		if(chunk->payload == NULL){
 			mosquitto__free(chunk->source.id);
 			mosquitto__free(chunk->source.username);
 			mosquitto__free(chunk->topic);
 			log__printf(NULL, MOSQ_LOG_ERR, "Error: Out of memory.");
 			return MOSQ_ERR_NOMEM;
 		}
-		read_e(db_fptr, UHPA_ACCESS(chunk->payload, chunk->F.payloadlen), chunk->F.payloadlen);
+		read_e(db_fptr, chunk->payload, chunk->F.payloadlen);
+		/* Ensure zero terminated regardless of contents */
+		((uint8_t *)chunk->payload)[chunk->F.payloadlen] = 0;
 	}
 
 	return MOSQ_ERR_SUCCESS;

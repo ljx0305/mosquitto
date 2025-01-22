@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 # Multi tests for extended auth with a single step.
 # * Error in plugin
@@ -71,6 +71,8 @@ try:
     sock.close()
 
     rc = 0
+except mosq_test.TestError:
+    pass
 finally:
     os.remove(conf_file)
     broker.terminate()

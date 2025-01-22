@@ -14,13 +14,18 @@ tests = [
 
     (1, ['./02-subscribe-qos0.py', 'c/02-subscribe-qos0.test']),
     (1, ['./02-subscribe-qos1.py', 'c/02-subscribe-qos1.test']),
+    (1, ['./02-subscribe-qos1.py', 'c/02-subscribe-qos1-async1.test']),
+    (1, ['./02-subscribe-qos1.py', 'c/02-subscribe-qos1-async2.test']),
     (1, ['./02-subscribe-qos2.py', 'c/02-subscribe-qos2.test']),
     (1, ['./02-unsubscribe-multiple-v5.py', 'c/02-unsubscribe-multiple-v5.test']),
     (1, ['./02-unsubscribe-v5.py', 'c/02-unsubscribe-v5.test']),
     (1, ['./02-unsubscribe.py', 'c/02-unsubscribe.test']),
 
     (1, ['./03-publish-b2c-qos1.py', 'c/03-publish-b2c-qos1.test']),
+    (1, ['./03-publish-b2c-qos1-unexpected-puback.py', 'c/03-publish-b2c-qos1-unexpected-puback.test']),
     (1, ['./03-publish-b2c-qos2-len.py', 'c/03-publish-b2c-qos2-len.test']),
+    (1, ['./03-publish-b2c-qos2-unexpected-pubrel.py', 'c/03-publish-b2c-qos2-unexpected-pubrel.test']),
+    (1, ['./03-publish-b2c-qos2-unexpected-pubcomp.py', 'c/03-publish-b2c-qos2-unexpected-pubcomp.test']),
     (1, ['./03-publish-b2c-qos2.py', 'c/03-publish-b2c-qos2.test']),
     (1, ['./03-publish-c2b-qos1-disconnect.py', 'c/03-publish-c2b-qos1-disconnect.test']),
     (1, ['./03-publish-c2b-qos1-len.py', 'c/03-publish-c2b-qos1-len.test']),
@@ -43,6 +48,8 @@ tests = [
     (1, ['./08-ssl-bad-cacert.py', 'c/08-ssl-bad-cacert.test']),
     (1, ['./08-ssl-connect-cert-auth-enc.py', 'c/08-ssl-connect-cert-auth-enc.test']),
     (1, ['./08-ssl-connect-cert-auth.py', 'c/08-ssl-connect-cert-auth.test']),
+    (1, ['./08-ssl-connect-cert-auth.py', 'c/08-ssl-connect-cert-auth-custom-ssl-ctx.test']),
+    (1, ['./08-ssl-connect-cert-auth.py', 'c/08-ssl-connect-cert-auth-custom-ssl-ctx-default.test']),
     (1, ['./08-ssl-connect-no-auth.py', 'c/08-ssl-connect-no-auth.test']),
 
     (1, ['./09-util-topic-tokenise.py', 'c/09-util-topic-tokenise.test']),

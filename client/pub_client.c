@@ -1,15 +1,17 @@
 /*
-Copyright (c) 2009-2019 Roger Light <roger@atchoo.org>
+Copyright (c) 2009-2020 Roger Light <roger@atchoo.org>
 
 All rights reserved. This program and the accompanying materials
-are made available under the terms of the Eclipse Public License v1.0
+are made available under the terms of the Eclipse Public License 2.0
 and Eclipse Distribution License v1.0 which accompany this distribution.
- 
+
 The Eclipse Public License is available at
-   http://www.eclipse.org/legal/epl-v10.html
+   https://www.eclipse.org/legal/epl-2.0/
 and the Eclipse Distribution License is available at
   http://www.eclipse.org/org/documents/edl-v10.php.
- 
+
+SPDX-License-Identifier: EPL-2.0 OR BSD-3-Clause
+
 Contributors:
    Roger Light - initial implementation and documentation.
 */
@@ -45,6 +47,8 @@ static int line_buf_len = 1024;
 static bool disconnect_sent = false;
 static int publish_count = 0;
 static bool ready_for_repeat = false;
+static volatile int status = STATUS_CONNECTING;
+static int connack_result = 0;
 
 #ifdef WIN32
 static uint64_t next_publish_tv;
@@ -75,7 +79,7 @@ static void set_repeat_time(void)
 	next_publish_tv.tv_sec += cfg.repeat_delay.tv_sec;
 	next_publish_tv.tv_usec += cfg.repeat_delay.tv_usec;
 
-	next_publish_tv.tv_sec += next_publish_tv.tv_usec/1e6;
+	next_publish_tv.tv_sec += next_publish_tv.tv_usec/1000000;
 	next_publish_tv.tv_usec = next_publish_tv.tv_usec%1000000;
 }
 
@@ -128,7 +132,10 @@ void my_connect_callback(struct mosquitto *mosq, void *obj, int result, int flag
 	UNUSED(flags);
 	UNUSED(properties);
 
+	connack_result = result;
+
 	if(!result){
+		first_publish = true;
 		switch(cfg.pub_mode){
 			case MSGMODE_CMD:
 			case MSGMODE_FILE:
@@ -176,7 +183,8 @@ void my_connect_callback(struct mosquitto *mosq, void *obj, int result, int flag
 			}else{
 				err_printf(&cfg, "Connection error: %s\n", mosquitto_connack_string(result));
 			}
-			mosquitto_disconnect_v5(mosq, 0, cfg.disconnect_props);
+			/* let the loop know that this is an unrecoverable connection */
+			status = STATUS_NOHOPE;
 		}
 	}
 }
@@ -184,12 +192,18 @@ void my_connect_callback(struct mosquitto *mosq, void *obj, int result, int flag
 
 void my_publish_callback(struct mosquitto *mosq, void *obj, int mid, int reason_code, const mosquitto_property *properties)
 {
+	char *reason_string = NULL;
 	UNUSED(obj);
 	UNUSED(properties);
 
 	last_mid_sent = mid;
 	if(reason_code > 127){
 		err_printf(&cfg, "Warning: Publish %d failed: %s.\n", mid, mosquitto_reason_string(reason_code));
+		mosquitto_property_read_string(properties, MQTT_PROP_REASON_STRING, &reason_string, false);
+		if(reason_string){
+			err_printf(&cfg, "%s\n", reason_string);
+			free(reason_string);
+		}
 	}
 	publish_count++;
 
@@ -210,7 +224,7 @@ void my_publish_callback(struct mosquitto *mosq, void *obj, int mid, int reason_
 
 int pub_shared_init(void)
 {
-	line_buf = malloc(line_buf_len);
+	line_buf = malloc((size_t )line_buf_len);
 	if(!line_buf){
 		err_printf(&cfg, "Error: Out of memory.\n");
 		return 1;
@@ -219,115 +233,149 @@ int pub_shared_init(void)
 }
 
 
-int pub_shared_loop(struct mosquitto *mosq)
+static int pub_stdin_line_loop(struct mosquitto *mosq)
 {
-	int read_len;
-	int pos;
-	int rc, rc2;
 	char *buf2;
-	int buf_len_actual;
-	int mode;
-	int loop_delay = 1000;
+	int buf_len_actual = 0;
+	int pos;
+	int rc = MOSQ_ERR_SUCCESS;
+	int read_len;
 	bool stdin_finished = false;
 
-	if(cfg.repeat_count > 1 && (cfg.repeat_delay.tv_sec == 0 || cfg.repeat_delay.tv_usec != 0)){
-		loop_delay = cfg.repeat_delay.tv_usec / 2000;
-	}
-
-	mode = cfg.pub_mode;
-
-	if(mode == MSGMODE_STDIN_LINE){
-		mosquitto_loop_start(mosq);
-		stdin_finished = false;
-	}
-
+	mosquitto_loop_start(mosq);
+	stdin_finished = false;
 	do{
-		if(mode == MSGMODE_STDIN_LINE){
-			if(status == STATUS_CONNACK_RECVD){
-				pos = 0;
-				read_len = line_buf_len;
-				while(status == STATUS_CONNACK_RECVD && fgets(&line_buf[pos], read_len, stdin)){
-					buf_len_actual = strlen(line_buf);
-					if(line_buf[buf_len_actual-1] == '\n'){
-						line_buf[buf_len_actual-1] = '\0';
-						rc2 = my_publish(mosq, &mid_sent, cfg.topic, buf_len_actual-1, line_buf, cfg.qos, cfg.retain);
-						if(rc2){
-							err_printf(&cfg, "Error: Publish returned %d, disconnecting.\n", rc2);
-							mosquitto_disconnect_v5(mosq, MQTT_RC_DISCONNECT_WITH_WILL_MSG, cfg.disconnect_props);
-						}
-						break;
-					}else{
-						line_buf_len += 1024;
-						pos += 1023;
-						read_len = 1024;
-						buf2 = realloc(line_buf, line_buf_len);
-						if(!buf2){
-							err_printf(&cfg, "Error: Out of memory.\n");
-							return MOSQ_ERR_NOMEM;
-						}
-						line_buf = buf2;
+		if(status == STATUS_CONNECTING){
+#ifdef WIN32
+			Sleep(100);
+#else
+			struct timespec ts;
+			ts.tv_sec = 0;
+			ts.tv_nsec = 100000000;
+			nanosleep(&ts, NULL);
+#endif
+		}
+
+		if(status == STATUS_NOHOPE){
+			return MOSQ_ERR_CONN_REFUSED;
+		}
+
+		if(status == STATUS_CONNACK_RECVD){
+			pos = 0;
+			read_len = line_buf_len;
+			while(status == STATUS_CONNACK_RECVD && fgets(&line_buf[pos], read_len, stdin)){
+				buf_len_actual = (int )strlen(line_buf);
+				if(line_buf[buf_len_actual-1] == '\n'){
+					line_buf[buf_len_actual-1] = '\0';
+					rc = my_publish(mosq, &mid_sent, cfg.topic, buf_len_actual-1, line_buf, cfg.qos, cfg.retain);
+					pos = 0;
+					if(rc != MOSQ_ERR_SUCCESS && rc != MOSQ_ERR_NO_CONN){
+						return rc;
 					}
-				}
-				if(feof(stdin)){
-					if(mid_sent == -1){
-						/* Empty file */
-						mosquitto_disconnect_v5(mosq, 0, cfg.disconnect_props);
-						disconnect_sent = true;
-						status = STATUS_DISCONNECTING;
-					}else{
-						last_mid = mid_sent;
-						status = STATUS_WAITING;
+					break;
+				}else{
+					line_buf_len += 1024;
+					pos += read_len-1;
+					read_len = 1024;
+					buf2 = realloc(line_buf, (size_t )line_buf_len);
+					if(!buf2){
+						err_printf(&cfg, "Error: Out of memory.\n");
+						return MOSQ_ERR_NOMEM;
 					}
-					stdin_finished = true;
-				}else if(status == STATUS_DISCONNECTED){
-					/* Not end of stdin, so we've lost our connection and must
-					 * reconnect */
+					line_buf = buf2;
 				}
-			}else if(status == STATUS_WAITING){
-				if(last_mid_sent == last_mid && disconnect_sent == false){
+			}
+			if(pos != 0){
+				rc = my_publish(mosq, &mid_sent, cfg.topic, buf_len_actual, line_buf, cfg.qos, cfg.retain);
+				if(rc){
+					if(cfg.qos>0) return rc;
+				}
+			}
+			if(feof(stdin)){
+				if(mid_sent == -1){
+					/* Empty file */
 					mosquitto_disconnect_v5(mosq, 0, cfg.disconnect_props);
 					disconnect_sent = true;
+					status = STATUS_DISCONNECTING;
+				}else{
+					last_mid = mid_sent;
+					status = STATUS_WAITING;
 				}
-#ifdef WIN32
-				Sleep(100);
-#else
-				struct timespec ts;
-				ts.tv_sec = 0;
-				ts.tv_nsec = 100000000;
-				nanosleep(&ts, NULL);
-#endif
-			}
-			rc = MOSQ_ERR_SUCCESS;
-		}else{
-			rc = mosquitto_loop(mosq, loop_delay, 1);
-			if(ready_for_repeat && check_repeat_time()){
-				rc = 0;
-				switch(cfg.pub_mode){
-					case MSGMODE_CMD:
-					case MSGMODE_FILE:
-					case MSGMODE_STDIN_FILE:
-						rc = my_publish(mosq, &mid_sent, cfg.topic, cfg.msglen, cfg.message, cfg.qos, cfg.retain);
-						break;
-					case MSGMODE_NULL:
-						rc = my_publish(mosq, &mid_sent, cfg.topic, 0, NULL, cfg.qos, cfg.retain);
-						break;
-					case MSGMODE_STDIN_LINE:
-						break;
-				}
-				if(rc){
-					err_printf(&cfg, "Error sending repeat publish: %s", mosquitto_strerror(rc));
-				}
+				stdin_finished = true;
+			}else if(status == STATUS_DISCONNECTED){
+				/* Not end of stdin, so we've lost our connection and must
+				 * reconnect */
 			}
 		}
-	}while(rc == MOSQ_ERR_SUCCESS && stdin_finished == false);
 
-	if(mode == MSGMODE_STDIN_LINE){
-		mosquitto_loop_stop(mosq, false);
-	}
+		if(status == STATUS_WAITING){
+			if(last_mid_sent == last_mid && disconnect_sent == false){
+				mosquitto_disconnect_v5(mosq, 0, cfg.disconnect_props);
+				disconnect_sent = true;
+			}
+#ifdef WIN32
+			Sleep(100);
+#else
+			struct timespec ts;
+			ts.tv_sec = 0;
+			ts.tv_nsec = 100000000;
+			nanosleep(&ts, NULL);
+#endif
+		}
+	}while(stdin_finished == false);
+	mosquitto_loop_stop(mosq, false);
+
 	if(status == STATUS_DISCONNECTED){
 		return MOSQ_ERR_SUCCESS;
 	}else{
 		return rc;
+	}
+}
+
+
+static int pub_other_loop(struct mosquitto *mosq)
+{
+	int rc;
+	int loop_delay = 1000;
+
+	if(cfg.repeat_count > 1 && (cfg.repeat_delay.tv_sec == 0 || cfg.repeat_delay.tv_usec != 0)){
+		loop_delay = (int )cfg.repeat_delay.tv_usec / 2000;
+	}
+
+	do{
+		rc = mosquitto_loop(mosq, loop_delay, 1);
+		if(ready_for_repeat && check_repeat_time()){
+			rc = MOSQ_ERR_SUCCESS;
+			switch(cfg.pub_mode){
+				case MSGMODE_CMD:
+				case MSGMODE_FILE:
+				case MSGMODE_STDIN_FILE:
+					rc = my_publish(mosq, &mid_sent, cfg.topic, cfg.msglen, cfg.message, cfg.qos, cfg.retain);
+					break;
+				case MSGMODE_NULL:
+					rc = my_publish(mosq, &mid_sent, cfg.topic, 0, NULL, cfg.qos, cfg.retain);
+					break;
+			}
+			if(rc != MOSQ_ERR_SUCCESS && rc != MOSQ_ERR_NO_CONN){
+				err_printf(&cfg, "Error sending repeat publish: %s", mosquitto_strerror(rc));
+			}
+		}
+	}while(rc == MOSQ_ERR_SUCCESS);
+
+	if(status == STATUS_DISCONNECTED){
+		return MOSQ_ERR_SUCCESS;
+	}else{
+		return rc;
+	}
+}
+
+
+int pub_shared_loop(struct mosquitto *mosq)
+{
+	if(cfg.pub_mode == MSGMODE_STDIN_LINE){
+		return pub_stdin_line_loop(mosq);
+	}else{
+		return pub_other_loop(mosq);
 	}
 }
 
@@ -338,20 +386,28 @@ void pub_shared_cleanup(void)
 }
 
 
-void print_usage(void)
+static void print_version(void)
+{
+	int major, minor, revision;
+
+	mosquitto_lib_version(&major, &minor, &revision);
+	printf("mosquitto_pub version %s running on libmosquitto %d.%d.%d.\n", VERSION, major, minor, revision);
+}
+
+static void print_usage(void)
 {
 	int major, minor, revision;
 
 	mosquitto_lib_version(&major, &minor, &revision);
 	printf("mosquitto_pub is a simple mqtt client that will publish a message on a single topic and exit.\n");
 	printf("mosquitto_pub version %s running on libmosquitto %d.%d.%d.\n\n", VERSION, major, minor, revision);
-	printf("Usage: mosquitto_pub {[-h host] [-p port] [-u username] [-P password] -t topic | -L URL}\n");
+	printf("Usage: mosquitto_pub {[-h host] [--unix path] [-p port] [-u username] [-P password] -t topic | -L URL}\n");
 	printf("                     {-f file | -l | -n | -m message}\n");
-	printf("                     [-c] [-k keepalive] [-q qos] [-r] [--repeat N] [--repeat-delay time]\n");
+	printf("                     [-c] [-k keepalive] [-q qos] [-r] [--repeat N] [--repeat-delay time] [-x session-expiry]\n");
 #ifdef WITH_SRV
-	printf("                     [-A bind_address] [-S]\n");
+	printf("                     [-A bind_address] [--nodelay] [-S]\n");
 #else
-	printf("                     [-A bind_address]\n");
+	printf("                     [-A bind_address] [--nodelay]\n");
 #endif
 	printf("                     [-i id] [-I id_prefix]\n");
 	printf("                     [-d] [--quiet]\n");
@@ -363,6 +419,7 @@ void print_usage(void)
 	printf("                       [--ciphers ciphers] [--insecure]\n");
 	printf("                       [--tls-alpn protocol]\n");
 	printf("                       [--tls-engine engine] [--keyform keyform] [--tls-engine-kpass-sha1]]\n");
+	printf("                       [--tls-use-os-certs]\n");
 #ifdef FINAL_WITH_TLS_PSK
 	printf("                     [--psk hex-key --psk-identity identity [--ciphers ciphers]]\n");
 #endif
@@ -376,6 +433,11 @@ void print_usage(void)
 	printf(" -A : bind the outgoing socket to this host/ip address. Use to control which interface\n");
 	printf("      the client communicates over.\n");
 	printf(" -d : enable debug messages.\n");
+	printf(" -c : disable clean session/enable persistent client mode\n");
+	printf("      When this argument is used, the broker will be instructed not to clean existing sessions\n");
+	printf("      for the same client id when the client connects, and sessions will never expire when the\n");
+	printf("      client disconnects. MQTT v5 clients can change their session expiry interval with the -x\n");
+	printf("      argument.\n");
 	printf(" -D : Define MQTT v5 properties. See the documentation for more details.\n");
 	printf(" -f : send the contents of a file as the message.\n");
 	printf(" -h : mqtt host to connect to. Defaults to localhost.\n");
@@ -401,10 +463,18 @@ void print_usage(void)
 	printf(" -u : provide a username\n");
 	printf(" -V : specify the version of the MQTT protocol to use when connecting.\n");
 	printf("      Can be mqttv5, mqttv311 or mqttv31. Defaults to mqttv311.\n");
+	printf(" -x : Set the session-expiry-interval property on the CONNECT packet. Applies to MQTT v5\n");
+	printf("      clients only. Set to 0-4294967294 to specify the session will expire in that many\n");
+	printf("      seconds after the client disconnects, or use -1, 4294967295, or ∞ for a session\n");
+	printf("      that does not expire. Defaults to -1 if -c is also given, or 0 if -c not given.\n");
 	printf(" --help : display this message.\n");
+	printf(" --nodelay : disable Nagle's algorithm, to reduce socket sending latency at the possible\n");
+	printf("             expense of more packets being sent.\n");
+	printf(" --quiet : don't print error messages.\n");
 	printf(" --repeat : if publish mode is -f, -m, or -s, then repeat the publish N times.\n");
 	printf(" --repeat-delay : if using --repeat, wait time seconds between publishes. Defaults to 0.\n");
-	printf(" --quiet : don't print error messages.\n");
+	printf(" --unix : connect to a broker through a unix domain socket instead of a TCP socket,\n");
+	printf("          e.g. /tmp/mosquitto.sock\n");
 	printf(" --will-payload : payload for the client Will, which is sent by the broker in case of\n");
 	printf("                  unexpected disconnection. If not given and will-topic is set, a zero\n");
 	printf("                  length message will be sent.\n");
@@ -428,6 +498,7 @@ void print_usage(void)
 	printf("              Do not use this option in a production environment.\n");
 	printf(" --tls-engine : If set, enables the use of a TLS engine device.\n");
 	printf(" --tls-engine-kpass-sha1 : SHA1 of the key password to be used with the selected SSL engine.\n");
+	printf(" --tls-use-os-certs : Load and trust OS provided CA certificates.\n");
 #  ifdef FINAL_WITH_TLS_PSK
 	printf(" --psk : pre-shared-key in hexadecimal (no leading 0x) to enable TLS-PSK mode.\n");
 	printf(" --psk-identity : client identity string for TLS-PSK mode.\n");
@@ -455,6 +526,8 @@ int main(int argc, char *argv[])
 		if(rc == 2){
 			/* --help */
 			print_usage();
+		}else if(rc == 3){
+			print_version();
 		}else{
 			fprintf(stderr, "\nUse 'mosquitto_pub --help' to see usage.\n");
 		}
@@ -533,7 +606,11 @@ int main(int argc, char *argv[])
 	if(rc){
 		err_printf(&cfg, "Error: %s\n", mosquitto_strerror(rc));
 	}
-	return rc;
+	if(connack_result){
+		return connack_result;
+	}else{
+		return rc;
+	}
 
 cleanup:
 	mosquitto_lib_cleanup();
